@@ -34,14 +34,14 @@
 
 #pragma mark - Init
 
-- (instancetype)initWithUpdater:(id <IGListUpdatingDelegate>)updatingDelegate
+- (instancetype)initWithUpdater:(id <IGListUpdatingDelegate>)updater
                  viewController:(UIViewController *)viewController
                workingRangeSize:(NSInteger)workingRangeSize {
     IGAssertMainThread();
-    IGParameterAssert(updatingDelegate);
+    IGParameterAssert(updater);
 
     if (self = [super init]) {
-        NSPointerFunctions *keyFunctions = [updatingDelegate objectLookupPointerFunctions];
+        NSPointerFunctions *keyFunctions = [updater objectLookupPointerFunctions];
         NSPointerFunctions *valueFunctions = [NSPointerFunctions pointerFunctionsWithOptions:NSPointerFunctionsStrongMemory];
         NSMapTable *table = [[NSMapTable alloc] initWithKeyPointerFunctions:keyFunctions valuePointerFunctions:valueFunctions capacity:0];
         _sectionMap = [[IGListSectionMap alloc] initWithMapTable:table];
@@ -52,7 +52,7 @@
         _cellSectionControllerMap = [NSMapTable mapTableWithKeyOptions:NSMapTableObjectPointerPersonality | NSMapTableStrongMemory
                                                           valueOptions:NSMapTableStrongMemory];
 
-        _updatingDelegate = updatingDelegate;
+        _updater = updater;
         _viewController = viewController;
     }
     return self;
@@ -113,8 +113,9 @@
 }
 
 - (void)updateAfterPublicSettingsChange {
-    if (_collectionView != nil && _dataSource != nil) {
-        [self updateObjects:[[_dataSource objectsForListAdapter:self] copy]];
+    id<IGListAdapterDataSource> dataSource = _dataSource;
+    if (_collectionView != nil && dataSource != nil) {
+        [self updateObjects:[[dataSource objectsForListAdapter:self] copy] dataSource:dataSource];
     }
 }
 
@@ -258,19 +259,19 @@
     NSArray *newItems = [[dataSource objectsForListAdapter:self] copy];
 
     __weak __typeof__(self) weakSelf = self;
-    [self.updatingDelegate performUpdateWithCollectionView:collectionView
+    [self.updater performUpdateWithCollectionView:collectionView
                                                fromObjects:fromObjects
                                                  toObjects:newItems
                                                   animated:animated
                                      objectTransitionBlock:^(NSArray *toObjects) {
                                          // temporarily capture the item map that we are transitioning from in case
                                          // there are any item deletes at the same
-                                         weakSelf.previoussectionMap = [weakSelf.sectionMap copy];
+                                         weakSelf.previousSectionMap = [weakSelf.sectionMap copy];
 
-                                         [weakSelf updateObjects:toObjects];
+                                         [weakSelf updateObjects:toObjects dataSource:dataSource];
                                      } completion:^(BOOL finished) {
                                          // release the previous items
-                                         weakSelf.previoussectionMap = nil;
+                                         weakSelf.previousSectionMap = nil;
 
                                          if (completion) {
                                              completion(finished);
@@ -293,10 +294,10 @@
     NSArray *newItems = [[dataSource objectsForListAdapter:self] copy];
 
     __weak __typeof__(self) weakSelf = self;
-    [self.updatingDelegate reloadDataWithCollectionView:collectionView reloadUpdateBlock:^{
+    [self.updater reloadDataWithCollectionView:collectionView reloadUpdateBlock:^{
         // purge all section controllers from the item map so that they are regenerated
         [weakSelf.sectionMap reset];
-        [weakSelf updateObjects:newItems];
+        [weakSelf updateObjects:newItems dataSource:dataSource];
     } completion:completion];
 }
 
@@ -328,7 +329,7 @@
     UICollectionView *collectionView = self.collectionView;
     IGAssert(collectionView != nil, @"Tried to reload the adapter without a collection view");
 
-    [self.updatingDelegate reloadCollectionView:collectionView sections:sections];
+    [self.updater reloadCollectionView:collectionView sections:sections];
 }
 
 
@@ -437,10 +438,12 @@
 
 // this method is what updates the "source of truth"
 // this should only be called just before the collection view is updated
-- (void)updateObjects:(NSArray *)objects {
+- (void)updateObjects:(NSArray *)objects dataSource:(id<IGListAdapterDataSource>)dataSource {
+    IGParameterAssert(dataSource != nil);
+
 #if DEBUG
     for (id object in objects) {
-        IGAssert([object isEqual:object], @"Object instance %@ not equal to itself. This will break infra map tables.", object);
+        IGAssert([object isEqualToDiffableObject:object], @"Object instance %@ not equal to itself. This will break infra map tables.", object);
     }
 #endif
 
@@ -463,10 +466,10 @@
 
         // if not, query the data source for a new one
         if (sectionController == nil) {
-            sectionController = [self.dataSource listAdapter:self sectionControllerForObject:object];
+            sectionController = [dataSource listAdapter:self sectionControllerForObject:object];
         }
 
-        IGAssert(sectionController != nil, @"Data source <%@> cannot return a nil section controller.", self.dataSource);
+        IGAssert(sectionController != nil, @"Data source <%@> cannot return a nil section controller.", dataSource);
         if (sectionController == nil) {
             continue;
         }
@@ -501,10 +504,13 @@
         itemCount += [sectionController numberOfItems];
     }
 
-    [self updateBackgroundViewWithItemCount:itemCount];
+    [self updateBackgroundViewShouldHide:itemCount > 0];
 }
 
-- (void)updateBackgroundViewWithItemCount:(NSUInteger)itemCount {
+- (void)updateBackgroundViewShouldHide:(BOOL)shouldHide {
+    if (self.isInUpdateBlock) {
+        return; // will be called again when update block completes
+    }
     UIView *backgroundView = [self.dataSource emptyViewForListAdapter:self];
     // don't do anything if the client is using the same view
     if (backgroundView != _collectionView.backgroundView) {
@@ -513,13 +519,24 @@
         [_collectionView.backgroundView removeFromSuperview];
         _collectionView.backgroundView = backgroundView;
     }
-    _collectionView.backgroundView.hidden = itemCount > 0;
+    _collectionView.backgroundView.hidden = shouldHide;
+}
+
+- (BOOL)itemCountIsZero {
+    __block BOOL isZero = YES;
+    [self.sectionMap enumerateUsingBlock:^(id  _Nonnull object, IGListSectionController<IGListSectionType> * _Nonnull sectionController, NSInteger section, BOOL * _Nonnull stop) {
+        if (sectionController.numberOfItems > 0) {
+            isZero = NO;
+            *stop = YES;
+        }
+    }];
+    return isZero;
 }
 
 - (IGListSectionMap *)sectionMapAdjustForUpdateBlock:(BOOL)adjustForUpdateBlock {
     // if we are inside an update block, we may have to use the /previous/ item map for some operations
-    if (adjustForUpdateBlock && self.isInUpdateBlock && self.previoussectionMap != nil) {
-        return self.previoussectionMap;
+    if (adjustForUpdateBlock && self.isInUpdateBlock && self.previousSectionMap != nil) {
+        return self.previousSectionMap;
     } else {
         return self.sectionMap;
     }
@@ -893,8 +910,30 @@
         return;
     }
 
-    NSArray *indexPaths = [self indexPathsFromSectionController:sectionController indexes:indexes adjustForUpdateBlock:YES];
-    [self.updatingDelegate reloadItemsInCollectionView:collectionView indexPaths:indexPaths];
+    if (self.isInUpdateBlock) {
+        /**
+         UICollectionView is not designed to support -reloadSections: or -reloadItemsAtIndexPaths: during batch updates.
+         Internally it appears to convert these operations to a delete+insert. However the transformation is too simple
+         in that it doesn't account for the item's section being moved (naturally or explicitly) and can queue animation
+         collisions.
+         
+         If you have an object at section 2 with 4 items and attempt to reload item at index 1, you would create an
+         NSIndexPath at section: 2, item: 1. Within -performBatchUpdates:, UICollectionView converts this to a delete
+         and insert at the same NSIndexPath.
+         
+         If a section were inserted at position 2, the original section 2 has naturally shifted to section 3. However,
+         the insert NSIndexPath is section: 2, item: 1. Now the UICollectionView has a section animation at section 2,
+         as well as an item insert animation at section: 2, item: 1, and it will throw an exception.
+         
+         IGListAdapter tracks the before/after mapping of section controllers to make precise NSIndexPath conversions.
+         */
+        [self deleteInSectionController:sectionController atIndexes:indexes];
+        [self insertInSectionController:sectionController atIndexes:indexes];
+    } else {
+        NSArray *indexPaths = [self indexPathsFromSectionController:sectionController indexes:indexes adjustForUpdateBlock:YES];
+        [self.updater reloadItemsInCollectionView:collectionView indexPaths:indexPaths];
+        [self updateBackgroundViewShouldHide:![self itemCountIsZero]];
+    }
 }
 
 - (void)insertInSectionController:(IGListSectionController<IGListSectionType> *)sectionController atIndexes:(NSIndexSet *)indexes {
@@ -909,7 +948,8 @@
     }
 
     NSArray *indexPaths = [self indexPathsFromSectionController:sectionController indexes:indexes adjustForUpdateBlock:NO];
-    [self.updatingDelegate insertItemsIntoCollectionView:collectionView indexPaths:indexPaths];
+    [self.updater insertItemsIntoCollectionView:collectionView indexPaths:indexPaths];
+    [self updateBackgroundViewShouldHide:![self itemCountIsZero]];
 }
 
 - (void)deleteInSectionController:(IGListSectionController<IGListSectionType> *)sectionController atIndexes:(NSIndexSet *)indexes {
@@ -924,7 +964,8 @@
     }
 
     NSArray *indexPaths = [self indexPathsFromSectionController:sectionController indexes:indexes adjustForUpdateBlock:YES];
-    [self.updatingDelegate deleteItemsFromCollectionView:collectionView indexPaths:indexPaths];
+    [self.updater deleteItemsFromCollectionView:collectionView indexPaths:indexPaths];
+    [self updateBackgroundViewShouldHide:![self itemCountIsZero]];
 }
 
 - (void)reloadSectionController:(IGListSectionController <IGListSectionType> *)sectionController {
@@ -940,7 +981,8 @@
     }
 
     NSIndexSet *sections = [NSIndexSet indexSetWithIndex:section];
-    [self.updatingDelegate reloadCollectionView:collectionView sections:sections];
+    [self.updater reloadCollectionView:collectionView sections:sections];
+    [self updateBackgroundViewShouldHide:![self itemCountIsZero]];
 }
 
 - (void)performBatchAnimated:(BOOL)animated updates:(void (^)())updates completion:(void (^)(BOOL))completion {
@@ -950,11 +992,16 @@
     IGAssert(collectionView != nil, @"Performing batch updates without a collection view.");
 
     __weak __typeof__(self) weakSelf = self;
-    [self.updatingDelegate performUpdateWithCollectionView:collectionView animated:animated itemUpdates:^{
+    [self.updater performUpdateWithCollectionView:collectionView animated:animated itemUpdates:^{
         weakSelf.isInUpdateBlock = YES;
         updates();
         weakSelf.isInUpdateBlock = NO;
-    } completion:completion];
+    } completion: ^(BOOL finished) {
+        [weakSelf updateBackgroundViewShouldHide:![weakSelf itemCountIsZero]];
+        if (completion) {
+            completion(finished);
+        }
+    }];
 }
 
 - (void)scrollToSectionController:(IGListSectionController<IGListSectionType> *)sectionController

@@ -13,8 +13,7 @@
 #import <unordered_map>
 #import <vector>
 
-#import <UIKit/UIKit.h>
-
+#import <IGListKit/IGListCompatibility.h>
 #import <IGListKit/IGListMacros.h>
 #import <IGListKit/IGListExperiments.h>
 

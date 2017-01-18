@@ -15,7 +15,8 @@
 <
 IGListCollectionContext,
 IGListDisplayDelegate,
-IGListScrollDelegate
+IGListScrollDelegate,
+IGListWorkingRangeDelegate
 >
 
 @property (nonatomic, strong, readonly) NSOrderedSet<__kindof IGListSectionController<IGListSectionType> *> *sectionControllers;
@@ -34,5 +35,6 @@ IGListScrollDelegate
 
 - (IGListSectionController <IGListSectionType> *)sectionControllerForObjectIndex:(NSInteger)itemIndex;
 - (NSInteger)offsetForSectionController:(IGListSectionController<IGListSectionType> *)sectionController;
+- (void)reloadData;
 
 @end

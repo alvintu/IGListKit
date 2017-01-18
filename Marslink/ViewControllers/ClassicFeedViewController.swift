@@ -23,6 +23,7 @@
 import UIKit
 
 class ClassicFeedViewController: UIViewController {
+    //a UIViewController subclass that implements UICollectionViewDataSource in an extension
   
   let loader = JournalEntryLoader()
   let solFormatter = SolFormatter()
@@ -40,6 +41,8 @@ class ClassicFeedViewController: UIViewController {
   
   override func viewDidLoad() {
     super.viewDidLoad()
+    
+    //viewDidLoad creates a UICollectionView, register cells, sets dataSource, and adds it to the view hierarchy
     
     collectionView.register(JournalEntryCell.self, forCellWithReuseIdentifier: "JournalEntryCell")
     collectionView.register(JournalEntryDateCell.self, forCellWithReuseIdentifier: "JournalEntryDateCell")
@@ -60,6 +63,7 @@ class ClassicFeedViewController: UIViewController {
 extension ClassicFeedViewController: UICollectionViewDataSource {
   
   func numberOfSections(in collectionView: UICollectionView) -> Int {
+    
     return loader.entries.count
   }
   
