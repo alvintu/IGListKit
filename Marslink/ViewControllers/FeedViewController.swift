@@ -11,7 +11,7 @@ import UIKit
 class FeedViewController: UIViewController {
     
     let pathfinder = Pathfinder()
-    
+    let wxScanner = WxScanner()
     lazy var adapter : IGListAdapter = {
         //workingRangeSize is the size of working range, whic hallows preparation of content for sections just outside the visible frame
         return IGListAdapter(updater:IGListAdapterUpdater(), viewController: self, workingRangeSize: 0)
@@ -38,6 +38,10 @@ class FeedViewController: UIViewController {
         loader.loadLatest()
         adapter.collectionView = collectionView
         adapter.dataSource = self
+        
+        pathfinder.delegate = self
+        pathfinder.connect()
+
     }
     
     override func viewDidLayoutSubviews() {
@@ -68,9 +72,17 @@ extension FeedViewController: IGListAdapterDataSource {
     //loader.entries is provided as it contains journal entries
     
     func objects(for listAdapter: IGListAdapter) -> [IGListDiffable] {
-        var items : [IGListDiffable] = pathfinder.messages
+        // 1
+        var items: [IGListDiffable] = [wxScanner.currentWeather]
         items += loader.entries as [IGListDiffable]
-        return items
+        items += pathfinder.messages as [IGListDiffable]
+        // 2
+        return items.sorted(by: { (left: Any, right: Any) -> Bool in
+            if let left = left as? DateSortable, let right = right as? DateSortable {
+                return left.date > right.date
+            }
+            return false
+        })
     }
     
     //2- for each data object, listadapter(_:sectionControllerFor:) must return a new instance of section controller. for now, we are returning a plan IGListSectionController to appease the compiler
@@ -88,6 +100,12 @@ extension FeedViewController: IGListAdapterDataSource {
     
     
     func emptyView(for listAdapter: IGListAdapter) -> UIView? {return nil}
-    
-    
 }
+
+    
+    extension FeedViewController: PathfinderDelegate {
+        func pathfinderDidUpdateMessages(pathfinder: Pathfinder) {
+            adapter.performUpdates(animated: true)
+        }
+    }
+
