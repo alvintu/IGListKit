@@ -8,12 +8,14 @@
 import IGListKit
 import UIKit
 
-class FeedViewController: UIViewController, IGListUpdatingDelegate {
+class FeedViewController: UIViewController {
+    
+    let pathfinder = Pathfinder()
     
     lazy var adapter : IGListAdapter = {
         //workingRangeSize is the size of working range, whic hallows preparation of content for sections just outside the visible frame
-        return IGListAdapter(updater:(), viewController: self, workingRangeSize: 0)
-    }
+        return IGListAdapter(updater:IGListAdapterUpdater(), viewController: self, workingRangeSize: 0)
+    }()
     
     let collectionView: IGListCollectionView = {
         let view = IGListCollectionView(frame: CGRect.zero, collectionViewLayout: UICollectionViewFlowLayout())
@@ -62,16 +64,30 @@ class FeedViewController: UIViewController, IGListUpdatingDelegate {
 }
 
 extension FeedViewController: IGListAdapterDataSource {
-    //1
+    //1 - objects(for:) returns array of data objects that hsould show up in the collection view
+    //loader.entries is provided as it contains journal entries
     
     func objects(for listAdapter: IGListAdapter) -> [IGListDiffable] {
-        return loader.entries
+        var items : [IGListDiffable] = pathfinder.messages
+        items += loader.entries as [IGListDiffable]
+        return items
     }
     
+    //2- for each data object, listadapter(_:sectionControllerFor:) must return a new instance of section controller. for now, we are returning a plan IGListSectionController to appease the compiler
+    // we will modify this to return a custom journal section controller
     func listAdapter(_ listAdapter: IGListAdapter, sectionControllerFor object: Any) -> IGListSectionController{
-        return IGListSectionController()
+        if object is Message{
+            return MessageSectionController()
+        }
+        else{
+        return JournalSectionController()
+    }
     }
     
+    //3 - emptyView(for:) returns a view that should be displayed when the list is empty. 
+    
+    
+    func emptyView(for listAdapter: IGListAdapter) -> UIView? {return nil}
     
     
 }
